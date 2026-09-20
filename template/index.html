@@ -55,7 +55,7 @@ td.k{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--accent)
 <div class="bar">
 <input type="search" id="q" placeholder="Search field, Kobo path, question, condition…">
 <select id="act"></select><select id="st"></select><select id="ch"></select>
-<select id="role"></select><select id="cov"></select>
+<select id="sub"></select><select id="role"></select><select id="cov"></select>
 </div>
 <div class="stats" id="stats"></div>
 <div class="scroll"><table id="tbl"><thead></thead><tbody></tbody></table></div>
@@ -63,27 +63,41 @@ td.k{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--accent)
 </main></div>
 <script>
 const el=id=>document.getElementById(id), splitv=s=>(s||'').split(',').map(x=>x.trim()).filter(Boolean);
-let DATA=null,ROLES=[],MODULES=[],R=[],FILES=[],view='mapping',mod=null,sec=null;
+let DATA=null,ROLES=[],ROLE_SETS={},MODULES=[],R=[],FILES=[],view='mapping',mod=null,sec=null,subf=null;
 function uniq(f){return [...new Set(R.flatMap(f))].filter(Boolean).sort()}
-function fill(s,l,o){s.innerHTML='<option value="">'+l+'</option>'+o.map(x=>`<option>${x}</option>`).join('')}
+function fill(s,l,o,cur){s.innerHTML='<option value="">'+l+'</option>'+o.map(x=>`<option ${x===cur?'selected':''}>${x}</option>`).join('')}
 function covOf(r){if(r.cov)return r.cov;return r.sec==='Form Actions'?'N/A (action)':(r.kf?'Mapped':'MISSING')}
+function curRoles(){return ROLE_SETS[mod]||ROLES}
 fetch('data.json').then(r=>r.json()).then(d=>{
-  DATA=d; ROLES=d.roles; MODULES=d.modules;
+  DATA=d; ROLES=d.roles; ROLE_SETS=d.role_sets||{}; MODULES=d.modules;
   R=d.rows.map((r,i)=>({...r,i:i+1,cov:covOf(r)}));
   FILES=d.files;
   mod=MODULES.find(m=>R.some(r=>r.mod===m))||MODULES[0];
   el('hsub').textContent=R.length+' field/action rows across '+MODULES.length+' modules · built from the workbook';
-  fill(el('act'),'All activity types',uniq(r=>splitv(r.act)));
-  fill(el('st'),'All statuses',uniq(r=>splitv(r.st)));
-  fill(el('ch'),'All chains',uniq(r=>[r.ch]));
-  fill(el('role'),'Any role',ROLES);
   fill(el('cov'),'All mapping states',['Mapped','Derived','MISSING','N/A (action)']);
   el('tabs').innerHTML=[['mapping','Field Mapping'],['perm','Permissions'],['files','Files']].map(([v,l])=>`<button data-v="${v}">${l}</button>`).join('');
-  el('tabs').querySelectorAll('button').forEach(b=>b.onclick=()=>{view=b.dataset.v;draw()});
+  el('tabs').querySelectorAll('button').forEach(b=>b.onclick=()=>{view=b.dataset.v;refillDependent();draw()});
   ['q','act','st','ch','role','cov'].forEach(id=>el(id).addEventListener('input',draw));
+  el('sub').addEventListener('input',()=>{subf=el('sub').value||null;draw()});
+  refillDependent();
   drawNav(); draw();
 }).catch(e=>{el('hsub').textContent='Could not load data.json: '+e});
 
+// sub-section and role options depend on the current module (and, for
+// sub-section, the current section) so they refresh whenever those change
+function refillDependent(){
+  const inMod=R.filter(r=>r.mod===mod);
+  const keep=(sel,list)=>list.includes(el(sel).value)?el(sel).value:null;
+  const a0=keep('act',uniq2(inMod,r=>splitv(r.act))), s0=keep('st',uniq2(inMod,r=>splitv(r.st))), c0=keep('ch',uniq2(inMod,r=>[r.ch]));
+  fill(el('act'),'All activity types',uniq2(inMod,r=>splitv(r.act)),a0);
+  fill(el('st'),'All statuses',uniq2(inMod,r=>splitv(r.st)),s0);
+  fill(el('ch'),'All chains',uniq2(inMod,r=>[r.ch]),c0);
+  const subs=[...new Set(inMod.filter(r=>!sec||r.sec===sec).map(r=>r.sub))].filter(Boolean).sort();
+  const keepSub=subs.includes(subf)?subf:null; subf=keepSub;
+  fill(el('sub'),'All sub sections',subs,subf);
+  fill(el('role'),'Any role',curRoles());
+}
+function uniq2(list,f){return [...new Set(list.flatMap(f))].filter(Boolean).sort()}
 function drawNav(){
   const mc={}; R.forEach(r=>mc[r.mod]=(mc[r.mod]||0)+1);
   let h='<div class="sec">Module tabs</div>';
@@ -93,15 +107,16 @@ function drawNav(){
   Object.keys(sc).forEach(s=>h+=`<button class="${sec===s?'on':''}" data-s="${s}">${s}<span class="cnt">${sc[s]}</span></button>`);
   el('nav').innerHTML=h;
   el('nav').querySelectorAll('button').forEach(b=>b.onclick=()=>{
-    if('m' in b.dataset){mod=b.dataset.m;sec=null}else{sec=b.dataset.s||null}
-    drawNav();draw()});
+    if('m' in b.dataset){mod=b.dataset.m;sec=null;subf=null}else{sec=b.dataset.s||null;subf=null}
+    drawNav();refillDependent();draw()});
 }
 function filtered(){const q=el('q').value.toLowerCase(),a=el('act').value,s=el('st').value,c=el('ch').value,ro=el('role').value,cv=el('cov').value;
-  return R.filter(r=>r.mod===mod&&(!sec||r.sec===sec)
+  const roles=curRoles();
+  return R.filter(r=>r.mod===mod&&(!sec||r.sec===sec)&&(!subf||r.sub===subf)
     &&(!a||r.act==='Any'||splitv(r.act).includes(a))
     &&(!s||r.st==='All'||splitv(r.st).includes(s))
     &&(!c||r.ch==='both'||r.ch===c)
-    &&(!ro||r.roles[ROLES.indexOf(ro)]==='Yes')
+    &&(!ro||r.roles[roles.indexOf(ro)]==='Yes')
     &&(!cv||r.cov===cv)
     &&(!q||(r.f+r.sub+r.kf+r.kq+r.hide+r.st).toLowerCase().includes(q)))}
 const cell=v=>v==='Yes'?'<span class="y">Yes</span>':v==='No'?'<span class="n">No</span>':'<span class="n">—</span>';
@@ -119,7 +134,8 @@ function draw(){
     body=rows.map(r=>`<tr><td class="f">${r.f}</td><td class="muted">${r.sec}</td><td class="muted">${r.sub}</td><td class="k">${r.kf||''}</td><td class="muted">${r.kq||''}</td><td class="muted">${r.hide||''}</td><td>${covtag(r.cov)}</td></tr>`);
     stats=[['Mapping rows',rows.length],['Mapped',rows.filter(r=>r.cov==='Mapped').length],['Missing',rows.filter(r=>r.cov==='MISSING').length],['Derived',rows.filter(r=>r.cov==='Derived').length]];
   }else{
-    head=['Field / Action','Sub section','Activity','Status','Chain',...ROLES.map(x=>x.replace('Super admin','SA').replace('Data Admin','DA').replace('Manger','Mgr'))];
+    const roles=curRoles();
+    head=['Field / Action','Sub section','Activity','Status','Chain',...roles.map(x=>x.trim().replace('Super admin','SA').replace('Data Admin','DA').replace('Manger','Mgr').replace(/^Agg\s*admin$/,'Agg Adm').replace(/^Impl\s*admin$/,'Impl Adm'))];
     body=rows.map(r=>`<tr><td class="f">${r.f}</td><td class="muted">${r.sub}</td><td class="muted">${r.act}</td><td class="muted">${r.st}</td><td class="muted">${r.ch}</td>${r.roles.map(v=>'<td>'+cell(v)+'</td>').join('')}</tr>`);
     stats=[['Rows',rows.length],['Sections',new Set(rows.map(r=>r.sec)).size],['Statuses',new Set(rows.map(r=>r.st)).size]];
   }
@@ -135,7 +151,7 @@ el('dl').onclick=()=>{
   let csv;
   if(view==='files'){csv=['File','Activity Type','Required','Multiple','Backend Key'].map(esc).join(',')+'\n'+
     FILES.filter(f=>f.mod===mod).map(f=>[f.name,f.act,f.req,f.multi,f.key].map(esc).join(',')).join('\n');}
-  else{csv=['Module','Field / Action','Section','Sub section','Activity','Status','Chain',...ROLES,'Kobo field','Kobo question','Hide condition','Coverage'].map(esc).join(',')+'\n'+
+  else{const roles=curRoles();csv=['Module','Field / Action','Section','Sub section','Activity','Status','Chain',...roles,'Kobo field','Kobo question','Hide condition','Coverage'].map(esc).join(',')+'\n'+
     filtered().map(r=>[r.mod,r.f,r.sec,r.sub,r.act,r.st,r.ch,...r.roles,r.kf,r.kq,r.hide,r.cov].map(esc).join(',')).join('\n');}
   const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
   a.download=(mod||'export').replace(/[^a-zA-Z0-9]+/g,'-').toLowerCase()+'-'+view+'.csv'; a.click();
